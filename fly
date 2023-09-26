@@ -1,0 +1,907 @@
+#!/usr/bin/perl -w
+# Fortuitous Label Yak
+
+use Tk;
+use Tk::FileSelect;
+use Tk::ROText;
+use Cwd;
+# use strict;
+# use diagnostics;
+use Fcntl;
+use File::Temp qw/ tempfile tempdir /;
+use File::Basename;
+use IO::Handle; 
+
+
+print basename(__FILE__), "\n";
+
+my $app_loc = Cwd::abs_path(__FILE__);
+my $app_dir = File::Basename::dirname($app_loc);
+
+require "$app_dir/SuperLabel.pm";
+require "$app_dir/Certificate.pm";
+
+my $global_tmpdir = tempdir( CLEANUP => 1 );
+my $FH;
+
+my $NumEntry = (eval 'require Tk::NumEntry; 1') ? 'NumEntry' : 'Entry';
+#=====================================================================
+my $debug=0;
+my $initfile="";
+my $global_tmp;
+my $type;
+my ($cols_value, $rows_value, $width_value, $height_value);
+my ($xoff_value, $yoff_value);
+my ($screen, $bottom, $status,$val);
+my ($wid, $hei,$r,$c);
+my ($fsref,$file,$Preamble,$Midamble,$Postamble,$Title);
+
+if ( $ARGV[0] )
+{
+  $initfile="./$ARGV[0]";
+}
+
+# Create main window and canvas
+my $main = new MainWindow;
+$main->geometry("600x800+10+10"); 
+
+#------------------------------------------------------------------------
+# Create the Top Box ----------------------------------------------------
+#------------------------------------------------------------------------
+
+my $top_box = $main->Frame;
+$top_box->configure(
+                     -relief => 'sunken',
+                     -bd => 4,
+                   );
+$top_box->pack(-side => 'top', -fill => 'x');
+
+#------------------------------------------------------------------------
+#- File Menu Button ------------------------------------------------------
+#------------------------------------------------------------------------
+# Menubar to hold menu items.
+my $menubar = $top_box->Frame()->pack('-side'  => 'left',
+                                     '-anchor' => 'nw',
+                                     '-fill'   => 'x');
+
+# The File menu.
+my $file_mb = $menubar->Menubutton(-text         => 'File',
+                                   -justify      => 'left',
+                                   -relief       => 'raised',
+                                   -width        => 8,
+                                   -tearoff        => 0,
+                                   -borderwidth  => 8);
+
+# Pack it on the left hand side of the menubar
+$file_mb->pack('-side' => 'left');
+
+# File->Open a directory menu item
+$file_mb->command('-label'       => 'Open File',
+                  '-accelerator' => 'Meta+D',
+                  '-underline'   => 1,
+                  '-command'     => \&select_in);
+# File->Filter filenames
+$file_mb->command('-label'       => 'Save Configuration',
+                  '-accelerator' => 'Meta+F',
+                  '-underline'   => 1,
+                  '-command'     => \&save_configuration);
+
+# File->Quit
+$file_mb->command('-label'       => 'Quit',
+                  '-accelerator' => 'Meta+Q',
+                  '-underline'   => 1);
+
+
+#------------------------------------------------------------------------
+# Create the File Box ----------------------------------------------------
+#------------------------------------------------------------------------
+
+my $file_box = $top_box->Frame;
+$file_box->configure(
+                     -relief => 'sunken',
+                     -bd     => 3,
+                    );
+$file_box->pack(-side => 'right');
+
+#------------------------------------------------------------------------
+#- In File Frame --------------------------------------------------------
+#------------------------------------------------------------------------
+my $infile_box = $file_box->Frame;
+$infile_box->configure( -relief => 'sunken',
+                        -bd     => 3 );
+
+#------------------------------------------------------------------------
+#- In File Frame Contents -----------------------------------------------
+#------------------------------------------------------------------------
+my $inlabel= $infile_box->Label(-text => "Input File:    "); 
+my $infile= $infile_box->Text(-width => '50', -height => '1');
+$infile->bind( '<Any-KeyPress>' => \&refresh_screen ); 
+
+
+my $inbrowse = $infile_box->Button(-text => 'Browse',
+                                   -command =>\&select_in );
+
+$inlabel->pack(-side => 'left');
+$infile->pack(-side => 'left');
+$inbrowse->pack(-side => 'right');
+$infile_box->pack(-side => 'top', -anchor=>'w');
+
+#------------------------------------------------------------------------
+#-Out File Frame ------------------------------------------------------------
+#------------------------------------------------------------------------
+my $outfile_box = $file_box->Frame;
+$outfile_box->configure(
+                         -relief  => 'sunken',
+                         -bd      => 3,
+                       );
+
+#------------------------------------------------------------------------
+#- Out File Frame Contents -----------------------------------------------
+#------------------------------------------------------------------------
+my $outlabel= $outfile_box->Label(-text => "Output File: "); 
+my $outfile= $outfile_box->Text(-width => '50', -height => '1' ); 
+my $outbrowse = $outfile_box->Button(-text => 'Browse',
+                           -command =>\&select_out );
+
+$outlabel->pack(-side => 'left');
+$outfile->pack(-side => 'left');
+$outbrowse->pack(-side => 'right');
+$outfile_box->pack(-side => 'top', -anchor=>'w');
+
+#------------------------------------------------------------------------
+#- Create a Middle Frame-------------------------------------------------
+#------------------------------------------------------------------------
+
+my $middle = $main->Frame;
+$middle->configure(
+         -relief       => 'sunken',
+         -bd => 3
+     );
+
+$middle->pack('-side'   => 'top', 
+              '-fill'   => 'both',
+              '-expand' => 'yes');
+#------------------------------------------------------------------------
+#------------------------------------------------------------------------
+#------------------------------------------------------------------------
+
+my $options = $middle->Frame;
+$options->configure(
+                     -relief => 'sunken',
+                     -width => '100',
+                     -bd => '2'
+                    );
+$options->pack(-side=>'left', -expand => 'yes', -fill=>'y'); 
+
+# Create various items
+
+my $radio_label=$options->Radiobutton(
+				      -text => 'Labels', 
+				      -variable => \$type, 
+				      -value => "Label",
+				      -command => sub 
+				                  {
+						    &set_size;
+						    &set_dimension;
+					            &hide_cert;
+						  }
+				     )->pack(-side => 'top', -anchor => 'w');
+
+$radio_label->select;
+#=====================================================================
+my $radio_postcard=$options->Radiobutton(
+			 -text => 'Postcard',
+			 -variable => \$type,
+			 -value => "Postcard",
+			 -command => sub 
+			             {	
+					&set_size;
+					&set_dimension;
+					&hide_cert;
+				     }
+					)->pack(-side => 'top', -anchor => 'w');
+
+#====================================================================#
+#== Envelope Radio  =================================================#
+#====================================================================#
+my $radio_envelope=$options->Radiobutton(
+		 -text => 'Envelope', 
+		 -variable => \$type,
+		 -value => "Envelope",
+		 -command => sub 
+                             {	
+                               &set_size;
+                               &set_dimension;
+                               &hide_cert;
+                             }
+)->pack(-side => 'top', -anchor => 'w');
+
+#====================================================================#
+#== Certificate Radio  ==============================================#
+#====================================================================#
+my $radio_certificate=$options->Radiobutton(
+		-text => 'Certificate', 
+		-variable => \$type,
+		-value => "Certificate",
+		-command => sub 
+		{	
+		    &set_size;
+		    &set_dimension;
+                    &show_cert;
+		}
+		)->pack(-side => 'top', -anchor => 'w');
+
+#====================================================================#
+#== Dimensions, Rows, Columns =======================================#
+#====================================================================#
+my $dimension_box = $options->Frame;
+my $col_box = $dimension_box->Frame;
+$col_box->configure(-bg=>"pink" );
+
+my $row_box = $dimension_box->Frame;
+$row_box->configure(-bg=>"pink" );
+
+$dimension_box->configure(
+                     -relief => 'sunken',
+                     -bd     => 2,
+                     );
+
+my $cols=$col_box->$NumEntry(-textvariable => \$cols_value, 
+                             -width => '3',
+                             -bg => "pink"
+);
+
+my $rows=$row_box->$NumEntry(-textvariable => \$rows_value, 
+                             -width => '3',
+                             -bg => "pink"
+);
+
+$cols->insert('0.0',"3");
+$rows->insert('0.0',"10");
+
+
+my $cols_lab=$col_box->Label(-text=>"Cols: ", 
+                             -width => '5', 
+                             -height => '1',
+                             -bg => "pink"
+);
+
+my $rows_lab=$row_box->Label(-text=>"Rows: ", 
+                             -width => '5', 
+                             -height => '1',
+                             -bg => "pink"
+ );
+
+#=====================================================================
+$dimension_box->pack(-side => 'top',-fill=>"x", -anchor => "e");
+#---------------------------------------------------------------------
+$col_box->pack(-side => 'top', -fill=>'both');
+ $dimension_box->hrule;
+$row_box->pack(-side => 'top', -fill=>'both');
+#=====================================================================
+$cols->pack( -side => 'right');
+$cols_lab->pack( -side => 'left');
+$rows->pack(-side => 'right');
+$rows_lab->pack( -side => 'left');
+#=====================================================================
+
+#====================================================================#
+#==  Size Options ===========================================#
+#====================================================================#
+my $size_box = $options->Frame;
+$size_box->configure(
+                     -relief => 'sunken',
+                     -bd     => 2,
+                     );
+
+my $width_box = $size_box->Frame;
+$width_box->configure(-bg=>"lightblue");
+my $height_box = $size_box->Frame;
+$height_box->configure(-bg=>"lightblue");
+
+my $width=$width_box->$NumEntry(-textvariable => \$width_value,
+                                -width => '3',
+                                -bg => 'lightblue');
+
+my $height=$height_box->$NumEntry(-textvariable => \$height_value,
+                                  -width => '3',
+                                  -bg => 'lightblue');
+
+my $width_box_lab=$width_box->Label(-text=>"Width: ", 
+                            -width => '6', 
+                            -height => '1',
+                            -bg => 'lightblue'
+);
+my $height_box_lab=$height_box->Label(-text=>"Height: ", 
+                            -width => '6', 
+                            -height => '1',
+                            -bg => 'lightblue'
+);
+
+#=====================================================================
+$size_box->pack(-side => 'top',-fill=>"x", -anchor => "e");
+#---------------------------------------------------------------------
+$width_box->pack(-side => 'top', -fill=>'both');
+$height_box->pack(-side => 'bottom', -fill=>'both');
+#=====================================================================
+$width->pack( -side => 'right');
+$width_box_lab->pack( -side => 'left');
+$height->pack(-side => 'right');
+$height_box_lab->pack( -side => 'left');
+$width->Set("8.5");
+$height->Set("11");
+
+#====================================================================#
+#==  Offset Options =================================================#
+#====================================================================#
+my $offset_box = $options->Frame;
+my $xoff_box = $offset_box->Frame;
+$xoff_box->configure(-bg=>"lightgreen");
+my $yoff_box = $offset_box->Frame;
+$yoff_box->configure(-bg=>"lightgreen");
+$offset_box->configure(
+                     -relief => 'sunken',
+                     -bd     => 2,
+                     );
+
+my $xoff=$xoff_box->$NumEntry(-textvariable => \$xoff_value, 
+                              -width => '3',
+                              -bg => 'lightgreen'
+);
+my $yoff=$yoff_box->$NumEntry(-textvariable => \$yoff_value,   
+                              -width => '3',
+                              -bg => 'lightgreen'
+);
+
+my $xoff_box_lab=$xoff_box->Label(-text=>"Xoff : ", 
+                            -width => '5', 
+                            -height => '1',
+                              -bg => 'lightgreen'
+);
+my $yoff_box_lab=$yoff_box->Label(-text=>"Yoff : ", 
+                            -width => '5', 
+                            -height => '1',
+                             -bg => 'lightgreen'
+ );
+#---------------------------------------------------------------------
+$offset_box->hrule;
+$offset_box->pack(-side => 'top',-fill=>"x", -anchor => "e");
+$xoff_box->pack(-side => 'top', -fill=>'both');
+$yoff_box->pack(-side => 'bottom', -fill=>'both');
+#=====================================================================
+$xoff->pack( -side => 'right');
+$xoff_box_lab->pack( -side => 'left');
+$yoff->pack(-side => 'right');
+$yoff_box_lab->pack( -side => 'left');
+$xoff->Set("0.0");
+$yoff->Set("0.0");
+#---------------------------------------------------------------------
+#---------------------------------------------------------------------
+# my $make_label_button= $options->Button(-text => 'Make Labels',
+#                                   -command => \&make_labels);
+my $make_label_button= $options->Button(-text => 'Make Labels',
+                                  -command => \&display_labels);
+$make_label_button->configure(
+                        -relief=>'raised',
+                        -bd=>'3',
+                        -bg=>'red',
+                      );
+$make_label_button->pack(-side => 'bottom');
+#=====================================================================
+#== The main label display ===========================================
+#=====================================================================
+my $display = $middle->Frame;
+$display->configure(
+         -relief       => 'raised',
+         -bd => 4,
+     );
+$display->pack(-side=>'right', -expand => 'yes', -fill => 'both');
+
+#=====================================================================
+#== The screen inside middle ===========================================
+#=====================================================================
+$screen = $display->Scrolled('ROText', -scrollbars=>'e');
+$screen->pack(-side => 'left', -expand=>'yes', -fill => 'both', -anchor=>'n');
+
+#------------------------------------------------------------------------
+$bottom = $main->Frame;
+$bottom->configure(
+                     -relief => 'sunken',
+                     -bd => '2',
+                     -bg => 'red',
+                     -height => '3',
+                    );
+$bottom->pack(-side=>'bottom', -fill=>'x');
+#------------------------------------------------------------------------
+#------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# Status Bar stuff.
+#------------------------------------------------------------------------
+$status = $bottom->Label(-text=>"Welcome to the Fortuitous Label Yak (FLY)!",
+                        -relief=>'sunken',
+                        -borderwidth=>2,
+                        -bg=>'tan',
+                        -anchor=>"w");
+
+$status->pack(-side=>'bottom', -fill=>'x');
+
+#------------------------------------------------------------------------
+# Certificate Bar stuff.
+#------------------------------------------------------------------------
+my $cert_flag=0;
+my $cert_pre_box = $bottom->Frame;
+my $cert_mid_box = $bottom->Frame;
+my $cert_post_box = $bottom->Frame;
+my $cert_title_box = $bottom->Frame;
+
+# if ( $initfile )
+{
+   &load_file($initfile);
+}
+
+sub show_cert
+{
+   if ( $cert_flag == 0 )
+   {
+     &show_cert_pre_txt;
+     &show_cert_mid_txt;
+     &show_cert_post_txt;
+     &show_cert_title;
+     $cert_flag=1;
+   }
+}
+
+sub hide_cert
+{
+   if ( $cert_flag == 1 )
+   {
+     $cert_pre_box->packForget();
+     $cert_mid_box->packForget();
+     $cert_post_box->packForget();
+     $cert_title_box->packForget();
+     $cert_flag=0;
+   }
+}
+
+
+my $cert_pre;
+sub show_cert_pre_txt
+{
+# --------- changed from global ----------
+my $cert_pre_label= $cert_pre_box->Label(-text => "Preamble:  "); 
+$cert_pre = $cert_pre_box->Text(-height => '1');
+$cert_pre->Set("To all whom these presents may come Greeting");
+# --------- end changed from global ----------
+
+  $cert_pre_box->configure( -relief => 'sunken', -bd => 3 );
+
+  $cert_pre_label->pack(-side => 'left');
+  $cert_pre->pack(-side => 'left', -expand => 'yes',-fill=>'x');
+  $cert_pre_box->pack(-side => 'top', 
+                      -anchor=>'w', 
+                      -expand => 'yes',
+                      -fill=>'x');
+}
+
+my $cert_mid_label= $cert_mid_box->Label(-text => "Midamble:  "); 
+my $cert_mid= $cert_mid_box->Text(-height => '1');
+$cert_mid->Set("has completed all the requirements of");
+sub show_cert_mid_txt
+{
+  $cert_mid_box->configure( -relief => 'sunken', -bd => 3 );
+  $cert_mid_label->pack(-side => 'left');
+  $cert_mid->pack(-side => 'left', -expand => 'yes',-fill=>'x');
+  $cert_mid_box->pack(-side => 'top', 
+                      -anchor=>'w', 
+                      -expand => 'yes',
+                      -fill=>'x');
+}
+
+  my $cert_post_label= $cert_post_box->Label(-text => "Postamble: "); 
+  my $cert_post= $cert_post_box->Text(-height => '1');
+  $cert_post->Set("with all the honors, rights, and priveleges thereto.");
+sub show_cert_post_txt
+{
+  $cert_post_box->configure( -relief => 'sunken', -bd => 3 );
+  $cert_post_label->pack(-side => 'left');
+  $cert_post->pack(-side => 'left', -expand => 'yes',-fill=>'x');
+  $cert_post_box->pack(-side => 'top', 
+                       -anchor=>'w', 
+                       -expand => 'yes',
+                       -fill=>'x');
+}
+
+  my $cert_title_label= $cert_title_box->Label(-text => "Title:     "); 
+  my $cert_title= $cert_title_box->Text(-height => '1');
+  $cert_title->Set("Linux Fundamentals");
+sub show_cert_title
+{
+  $cert_title_box->configure( -relief => 'sunken', -bd => 3 );
+  $cert_title_label->pack(-side => 'left');
+  $cert_title->pack(-side => 'left', -expand => 'yes',-fill=>'x');
+  $cert_title_box->pack(-side => 'top', 
+                        -anchor=>'w', 
+                        -expand => 'yes',
+                        -fill=>'x');
+}
+
+
+sub set_width
+{
+  if ($type eq "Label" || $type eq "Postcard" )
+  { 
+    $val = 8.5; 
+  }
+  elsif ($type eq "Envelope")
+  { 
+    $val = 9.0; 
+  }
+  $width->Set($val);
+}
+
+sub set_height
+{
+  if ($type eq "Label" || $type eq "Postcard" )
+    { 
+      $val = 11; 
+    }
+  elsif ($type eq "Envelope")
+    { 
+      $val = 4.0; 
+    }
+
+  $height->Set($val);
+
+}
+
+sub set_size
+{
+  if ($type eq "Label" || $type eq "Postcard" || $type eq "Certificate")
+    { 
+      $wid = 8.5; 
+      $hei = 11; 
+    }
+  elsif ($type eq "Envelope")
+    { 
+      $wid = 9.0; 
+      $hei = 4.0; 
+    }
+
+  $width->Set($wid);
+  $height->Set($hei);
+}
+
+sub set_dimension
+{
+    if ($type eq "Label")
+    {
+      $r = 10; 
+      $c = 3;
+    } 
+  elsif ( $type eq "Postcard" )
+    { 
+      $r = 2;  
+      $c = 2; 
+    } 
+  elsif ($type eq "Envelope" || $type eq "Certificate" )
+    {$r = 1; $c = 1;} 
+
+  $rows->Set($r);
+  $cols->Set($c);
+}
+
+
+sub status_update
+{
+   my $text = shift;
+   $status->configure(-text=>$text,
+                      -bg => 'tan');
+}
+
+sub blink
+{
+  my $widget = shift;
+  $widget->repeat(1000, sub {$widget->configure(-bg => 'tan' )});
+  $widget->bell; 
+} 
+
+sub status_warning
+{
+   my $text = shift;
+   $status->configure(-text=>$text, -bg => 'red');
+   blink($status);
+}
+
+sub Tk::ROText::Read 
+{
+   my ($text, $file, $filter) = @_;
+  
+   require Tk::IO;
+   my $fh = Tk::IO->new;
+   open($fh, $file) or $text->BackTrace("$0: $!: '$file'");
+   # $fh should be saved in $text.
+  
+   my $buf = "";
+   if ($filter and ref $filter eq 'CODE') 
+   {
+      while( $fh->read($buf, 1024 * 32) )
+      {
+        $text->insert('end', &$filter($buf, $text) );
+        $text->update;
+        $buf = "";
+      }
+   } 
+   else 
+   {
+      while( $fh->read($buf, 1024 * 32) )
+      {
+        $text->insert('end', $buf);
+        $text->update;
+        $buf = "";
+      }
+   } $fh->close;
+}
+
+sub Tk::Text::Load 
+{
+   my ($text, $file) = @_;
+   if (-r $file) {
+      $text->Busy;
+      $text->delete("1.0", "end");
+      $text->Read($file);
+      $text->Unbusy;
+   } 
+   else 
+   {
+      $text->BackTrace("Can't open: $file");
+   }
+}
+
+sub Tk::Entry::Set 
+{
+   my ($text, $val) = @_;
+   $text->Busy;
+   $text->delete('0.0', "end");
+   $text->insert('0.0', $val);
+   $text->Unbusy;
+}
+
+sub Tk::NumEntry::Set 
+{
+   my ($text, $val) = @_;
+   $text->Busy;
+   $text->delete('0.0', "end");
+   $text->insert('0.0', $val);
+   $text->Unbusy;
+}
+  
+sub Tk::Text::Set 
+{
+   my ($text, $val) = @_;
+   $text->Busy;
+   $text->delete('0.0', "end");
+   $text->insert('0.0', $val);
+   $text->Unbusy;
+}
+  
+sub Tk::Frame::hrule
+{
+   my ($frame) = @_;
+   my $bar = $frame->Frame;
+   $bar->configure( -height=>3, -relief => 'raised', -bd => 4 );
+   $bar->pack( -side=> 'top',-expand => 'yes', -fill => 'x');
+}
+
+     
+#------------------------------------------------------------------------
+#------------------------------------------------------------------------
+
+
+
+sub select_in
+{
+   status_update("Select an Input Label File:");
+   #$fsref = $main->getOpenFile(-directory  => ".",
+   $fsref = $main->FileSelect(-directory  => ".",
+                              -selectmode =>  "browse",
+                              -title      =>  "Input File",
+                              -width      =>  20,
+                              -height     =>  10, 
+                              );
+   print "fsref == $fsref\n" if $debug;
+   $file = $fsref->Show;
+   if ($file && -f $file )
+   {
+      $infile->delete("0.0", "end");
+      $infile->insert('0.0',$file);
+      $screen->Load($file);
+      status_update("Input File Selected");
+   }
+   else
+   {
+      status_warning("Invalid Input File");
+   }
+}
+
+sub refresh_screen
+{
+   my $file = $infile->get('0.0','end');
+   chomp $file;
+
+   $screen->delete("0.0", "end");
+
+   if ($file =~ s/[\s\t\n]+//g )
+   {
+      $infile->delete("0.0", "end");
+      $infile->insert("0.0", $file);
+   }
+   if ( -f $file )
+   {
+      status_update("File Loaded:");
+      $screen->Load($file);
+   }
+}
+
+sub select_out
+{
+   status_update("Select an Output Label File:");
+   $fsref = $main->FileSelect(-directory => ".",
+                           -selectmode =>  "browse",
+                           -title =>  "Output File",
+                           -width     =>  10,
+                           -height    =>  10, 
+                           );
+  $file = $fsref->Show;
+   if ( $file )
+   {
+      $outfile->delete("0.0", "end");
+      $outfile->insert('0.0',$file);
+      status_update("Output File Selected");
+   }
+}
+
+sub display_labels
+{
+   # Create the postscript string 
+   my $string=&create_labels;
+   # print "string = $string\n";
+   
+   my $file = $infile->get('0.0','end');
+   chomp $file;
+   if (! -e "$file" )
+   {
+      status_warning("Invalid File Specified, Please Try Again!");
+      return;
+   }
+  
+   ($FH, $global_tmp) = tempfile( DIR => $global_tmpdir);
+   print $FH $string;
+   # close FH;
+   system("gv $global_tmp \&");
+   status_update("Displaying Labels:");
+   &write_labels($string);
+}
+
+sub write_labels
+{
+   my $string = shift;
+   my $out = $outfile->get('0.0','end');
+
+   print "outfile = $out\n" if $debug;
+
+   if (open (TX, ">$out") )
+   {
+      status_update("Displaying Labels:");
+      print TX $string ;
+      close(TX);
+   }
+   status_update("Wrote Labels:");
+}
+
+sub create_labels
+{
+   my $string = "";
+   status_update("Making Labels:");
+   $file = $infile->get('0.0','end');
+   chomp $file;
+   if (! -f $file )
+   {
+         status_warning("Invalid Input File, Select Again:");
+         # print " File == \"$file\" \n " if $debug ;
+         return;
+   }
+
+   my %parm;
+
+   $parm{'Type'}="$type";
+
+   $parm{'Width'} = $width_value;               # Width/Height reversed
+   $parm{'Height'} = $height_value;             # Width/Height reversed
+   $parm{'Xoff'} = $xoff_value;                 # Xoffset
+   $parm{'Yoff'} = $yoff_value;                 # Yoffset
+   if ($type eq "Label")
+   {
+      print "cols =", $cols_value, "\n" if $debug;
+
+      $parm{'Cols'} = $cols_value;
+      $parm{'Rows'} = $rows_value;
+   }
+   elsif ($type eq "Postcard")
+   {
+      $parm{'Cols'} = 2;
+      $parm{'Rows'} = 2;
+   }
+   elsif ($type eq "Envelope")
+   {
+      $parm{'Cols'} = 1;
+      $parm{'Rows'} = 1;
+      $parm{'Width'} = $height_value;             # Width/Height reversed
+      $parm{'Height'} = $width_value;             # Width/Height reversed
+      if ($parm{'Width'} < 1.0) 
+      {
+         status_warning("Width out of Range:");
+         return;
+      }
+      if ($parm{'Height'} < 1.0) 
+      {
+         status_warning("Width out of Range:");
+         return;
+      }
+   }
+   elsif ($type eq "Certificate")
+   {
+      $parm{'Width'} = $height_value;             # Width/Height reversed
+      $parm{'Height'} = $width_value;             # Width/Height reversed
+      $parm{'Company'} = "Fortuitous Technologies Inc";
+
+      $Preamble =  $cert_pre->get('0.0','end');
+      $Midamble =  $cert_mid->get('0.0','end');
+      $Postamble = $cert_post->get('0.0','end');
+      $Title =     $cert_title->get('0.0','end');
+
+      chomp $Preamble;
+      chomp $Midamble;
+      chomp $Postamble;
+      chomp $Title;
+      $parm{'Preamble'} =  $Preamble;
+      $parm{'Midamble'} =  $Midamble;
+      $parm{'Postamble'} = $Postamble;
+      $parm{'Title'} =     $Title;
+   }
+   else
+   {
+      $parm{'Cols'} = 1;
+      $parm{'Rows'} = 1;
+   }
+
+   $parm{'AddressFile'}="$file";
+   my $label;
+   if ($type eq "Certificate")
+   {
+      $label = Certificate::Cert->new(%parm);
+      print "Entered: type === $type \n" if $debug;
+   }
+   else
+   {
+      $label = SuperLabel::LabelMaker->new(%parm);
+   }
+
+   $string .= $label->print();
+   return $string;
+}
+
+sub load_file
+{
+   my ($file) = @_;
+   
+   if ( $file )
+   {
+      $infile->delete("0.0", "end");
+      $infile->insert('0.0',$file);
+      $screen->Load($file);
+      print "arg = $file \n" if $debug;
+      status_update("Input File Selected");
+   }
+}
+
+MainLoop;
